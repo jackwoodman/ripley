@@ -30,13 +30,12 @@ particle = {
 
 entity = {
     'player' : '@',
-    'hunter' : '&'
+    'hunter' : '&',
+    'villager': 'β'
 }
 
 entities = [
-    ('player',[pos_x, pos_y]),
-    ('hunter',[pos_x - 10, pos_y - 10])
-    #('hunter',[pos_x + 15, pos_y - 15])
+    ('player',[pos_x, pos_y])
 ]
 
 features = {
@@ -80,6 +79,7 @@ def randomise_map(MAP, OBS, element_count):
             (x, y+1),  (x, y-1), (x+1, y+1),
             (x-1,y-1), (x+1,y-1), (x-1,y-1)]
 
+        # this is really bad code pls ignore it
         weights = [0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,5,5,6,7,8]
 
         for i in range(random.randint(0, random.choice(weights))):
@@ -104,21 +104,22 @@ def add_overlay(MAP, OBS, entity_list, particle_list):
     copy_map = copy.copy(MAP)
     copy_obs = copy.copy(OBS)
 
+    # load particles into map overlay
     for part in particle_list[1:]:
-        try:
-            p_x, p_y = part[1]
-        except:
-            print(particle_list)
-            g=input("====")
-        p_t = part[2]
-        copy_map[p_x][p_y] = particle[p_t]
+        p_x, p_y = part[1]
+        p_type = part[2]
+        copy_map[p_x][p_y] = particle[p_type]
 
+    # load entities into map overlay
     for ent in entity_list[::-1]:
-
         ent_co, ent_type = ent[2], ent[1]
-        ent_x, ent_y = ent_co
-        copy_map[ent_x][ent_y] = entity[ent_type]
-        copy_obs[ent_x][ent_y] = 1
+
+        # check entity isn't dead
+        if ent_type != "EMPTY":
+            ent_x, ent_y = ent_co
+            copy_map[ent_x][ent_y] = entity[ent_type]
+            copy_obs[ent_x][ent_y] = 1
+
     return (copy_map, copy_obs)
 
 def print_map(map, ent_list, mask=False, mask_size=0):
@@ -165,7 +166,19 @@ def print_map(map, ent_list, mask=False, mask_size=0):
 
 def spawn_entity(type, location, entity_tracker):
     # add new entity to entity tracker
-    entity_tracker.append([len(entity_tracker), type,location])
+
+    entity_id = len(entity_tracker)
+
+    # check if any dead entities exist, replace with new entity if they do
+    for element in entity_tracker:
+        if element[1] == "EMPTY":
+            entity_id = element[0]
+            break
+
+    if entity_id == len(entity_tracker):
+        entity_tracker.append([])
+    entity_tracker[entity_id] = [entity_id, type, location, ""]
+
     return entity_tracker
 
 def get_all(entity_tracker, name):
@@ -307,27 +320,59 @@ def wander(co_ord, OBS):
 
     return calculate_delta(random_direction())
 
+def villager_AI(entity_tracker, OBS, e_history):
+    global message_list
+    MOVE_CHANCE = 5
+    move_list = []
+    for i in range(MOVE_CHANCE):
+        move_list.append(i)
+
+    for villager in get_all(entity_tracker, 'villager'):
+        entity_id, villager_x, villager_y = villager[0], villager[2][0], villager[2][1]
+        player = entity_tracker[0][2]
+        c_distance = coord_dist(villager[2], player)
+
+        e_history = history_update(e_history, entity_id, villager[2])
+
+        if random.randint(0, 10) in move_list:
+            next_move = wander(villager[2], OBS)
+            entity_tracker, OBS = move_entity(entity_tracker,OBS, entity_id, next_move)
+
+    return entity_tracker, OBS, e_history
+
+
+
+
+
+
+
+
 def hunter_AI(entity_tracker, OBS, e_history):
+    # function to handle Ai states for each hunter in tracker
     global message_list
 
 
     for hunter in get_all(entity_tracker, 'hunter'):
-
-        entity_id = hunter[0] - 1
+        entity_id = hunter[0]
         hunter_x, hunter_y = hunter[2]
         player = entity_tracker[0][2]
         current_distance = coord_dist(hunter[2], player)
-        message_list.append("AI " + str(entity_id)+": " + entity_tracker[entity_id][3])
-        message_list.append("DIST: " + str(int(current_distance)))
 
+        # decide if to hunter player or to wander
+        if len(entity_tracker[entity_id]) < 4:
+            entity_tracker[entity_id].append("EMPTY")
         if current_distance < 20:
             entity_tracker[entity_id][3] = "hunting"
         else:
             entity_tracker[entity_id][3] = "wandering"
 
+        message_list.append("AI " + str(entity_id)+": " + entity_tracker[entity_id][3])
+        message_list.append("DIST: " + str(int(current_distance)))
+
+        # decided whether stuck or not
         e_history = history_update(e_history, entity_id, hunter[2])
         if check_stuck(e_history, entity_id):
-            next_move = next_step(hunter[2], player, OBS, override_recursion=10)
+            next_move = next_step(hunter[2], player, OBS, override_recursion=8)
         else:
             state = entity_tracker[entity_id][3]
             if state == "hunting":
@@ -377,9 +422,19 @@ def get_neighbours(node, OBS):
                     neighbours.append(pn)
     return neighbours
 
+def kill_entity(entity_tracker, e_history, entity_id):
+    death_state = [entity_id, "empty", (0, 0), "dead"]
+
+
+    entity_tracker[entity_id] = death_state
+    e_history[entity_id] = []
+    return entity_tracker, e_history
+
 
 def move_entity(entity_tracker, OBS, ent_id, delta):
+
     entity_x, entity_y = entity_tracker[ent_id][2]
+
 
     x_displace, y_displace = delta
 
@@ -418,18 +473,19 @@ def calculate_delta(direction):
 def compile_entities(entities):
     # compile all entities in starting list into entity tracker
     new_list = []
-    ent_count = 1
+    ent_count = 0
 
-    default_stance = {
+    default_state = {
         "hunter" : "wandering",
         "human"  : "wandering",
-        "player" : "playing"
+        "player" : "playing",
+        "villager": "wandering"
     }
 
     for en in entities:
         # assign ID to each entity before insertion into tracker
         ent_name, ent_co = en
-        ent = [ent_count, ent_name, ent_co, default_stance[ent_name]]
+        ent = [ent_count, ent_name, ent_co, default_state[ent_name]]
         new_list.append(ent)
         ent_count += 1
 
@@ -592,9 +648,9 @@ def age_particles(particle_tracker):
 
     return new_tracker
 
+#===============================================================================
 
-
-# start of the main
+# start of main
 print("\n -- RIPLEY --")
 print(" map size: "+str(M_S_L)+" x "+str(M_S_L))
 print(" initial entities: " + str(len(entities)))
@@ -622,10 +678,6 @@ MAP, OBS = randomise_map(MAP, OBS, goal_objects)
 entity_tracker = compile_entities(entities)
 particle_tracker = [1] # first element is p_id, all others are particles of [id, coord, type, age, lifespan,]
 
-# create history record for lost detection & pathfinding
-for ent in entity_tracker:
-    e_history[ent[0]] = []
-
 # intro animation
 for view in range(0, BOARD_SIDE_LENGTH):
     time.sleep(0.05)
@@ -637,6 +689,18 @@ last_move = time.time()
 
 #for i in range(100000):
 #    particle_tracker = add_particle("explosion", random_location(entity_tracker, 0), 5+random.randint(0 ,60), particle_tracker)
+
+
+# intial demo stuff
+test_location = random_location(entity_tracker, dist_from_player=15)
+entity_tracker = spawn_entity("hunter", test_location, entity_tracker)
+for i in range(5):
+    entity_tracker = spawn_entity("villager", random_location(entity_tracker, random.randint(10,50)),entity_tracker)
+
+
+# create history record for lost detection & pathfinding
+for ent in entity_tracker:
+    e_history[ent[0]] = []
 
 while True:
     # display map and hold for move delay
@@ -661,6 +725,10 @@ while True:
 
     # run hunter AI driver code
     entity_tracker, OBS, e_history = hunter_AI(entity_tracker, OBS, e_history)
+
+    # run villager AI driver code
+    entity_tracker, OBS, e_history = villager_AI(entity_tracker, OBS, e_history)
+
 
     # reset timer
     last_move = time.time()
