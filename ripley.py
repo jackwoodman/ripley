@@ -79,8 +79,22 @@ def randomise_map(MAP, OBS, element_count):
             (x, y+1),  (x, y-1), (x+1, y+1),
             (x-1,y-1), (x+1,y-1), (x-1,y-1)]
 
-        # this is really bad code pls ignore it
-        weights = [0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,5,5,6,7,8]
+        # map occurances x to position y (x : [y1, y2, yn])
+        weight_map = {
+            1 : [6, 7, 8],
+            2 : [0, 5],
+            3 : [4],
+            4 : [1, 2, 3]
+        }
+        
+        weights = []
+        # create a weight list for feature generation
+        for weight in weight_map.keys():
+            for position in weight_map[weight]:
+                for occurance in range(weight):
+                    # add an *weight* occurancances of position to the weight list
+                    weights.append(position)
+               
 
         for i in range(random.randint(0, random.choice(weights))):
             n_x, n_y = possibles[i]
