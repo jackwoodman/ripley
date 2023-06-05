@@ -4,12 +4,10 @@
 import time
 import math
 import copy
+import sys
 import random
+import interactions
 from pynput import keyboard
-
-global message_list
-global features
-
 
 # constants
 BOARD_SIDE_LENGTH = 51
@@ -21,7 +19,7 @@ pos_x, pos_y = M_S_L // 2, M_S_L // 2
 feature = {
     'empty' : ' ',
     'mountain' : '^',
-    'rock' : '#'
+    'rock' : '#',
 }
 
 particle = {
@@ -34,6 +32,10 @@ entity = {
     'villager': 'β'
 }
 
+item = {
+    'sword' : ['⚔', 50, -5, {"dmg":25}]
+}
+
 entities = [
     ('player',[pos_x, pos_y])
 ]
@@ -41,8 +43,41 @@ entities = [
 features = {
     'empty'   : {'count':0, 'instances':{}},
     'mountain': {'count':0, 'instances':{}},
-    'rock'    : {'count':0, 'instances':{}}
+    'rock'    : {'count':0, 'instances':{}},
+    'door'    : {'count':0, 'instances':{}}
 }
+
+
+def use_item(item_list, item_id):
+    name, hp, use_dmg, stats = item_list[item_id]
+    new_hp = hp + use_dmg
+    item_list[item_id] = [item_id, name, new_hp, use_dmg, stats]
+    return item_list
+
+def on_board(coordinates):
+    if isinstance(coordinates, list):
+        return all([(not ((n_x >= M_S_L) or (n_y >= M_S_L))) for (n_x, n_y, _) in coordinates])
+
+    else:
+        n_x, n_y, _ = coordinates
+        return not ((n_x >= M_S_L) or (n_y >= M_S_L))
+
+def occupied_on_map(coordinates, MAP):
+    if isinstance(coordinates, list):
+        return all([not MAP[n_x][n_y] for (n_x, n_y, _) in coordinates])
+
+    else:
+        n_x, n_y, _ = coordinates
+        return not ((n_x >= M_S_L) or (n_y >= M_S_L))
+
+def typewriter(text, total_time,wait_to_start=0):
+            time.sleep(wait_to_start)
+            sleep_time = total_time / len(text)
+            for x in text:
+                   print(x, end='')
+                   sys.stdout.flush()
+                   time.sleep(sleep_time)
+            print("")
 
 def estimate_loading(map_size):
     # model
@@ -62,12 +97,53 @@ def node_map(LENGTH):
         NODES.append(new_obs)
     return NODES
 
+def house(MAP, OBS, entity_tracker, particle_tracker):
+    fade_out(MAP, OBS, entity_tracker, particle_tracker)
+    time.sleep(1)
+    print("")
+    typewriter("You have entered a HOUSE.", 1)
+
+    typewriter("it is completely EMPTY...",2, 1)
+    time.sleep(1.5)
+    print("\n enter to return to the wild:")
+    wait = input()
+    fade_in(MAP, OBS, entity_tracker, particle_tracker)
+
+
 def node_set(LENGTH):
     NODES = []
     for row in range(M_S_L):
         for col in range(M_S_L):
             NODES.append((row, col))
     return NODES
+
+def house_structure(top_corner_coord):
+    x, y = top_corner_coord
+    return [
+        (x, y, "/"),  (x, y + 1, "Ħ"), (x, y + 2, "\\"),
+        (x + 1, y,"Ħ"),  (x + 1, y+1,"Ħ"), (x + 1, y+2,"Ħ"),
+        (x+2,y,"Ħ"), (x + 2,y+1," "), (x + 2,y+2,"Ħ")]
+
+def add_houses(MAP, OBS, features):
+    house_count = 500
+
+    for index in range(house_count):
+
+        while not on_board(house_struct := house_structure(random_location(None, -1))) or occupied_on_map(house_struct, MAP):
+            do = "nothing"
+
+        for element_x, element_y, element_filling in house_struct:
+            MAP[element_x][element_y] = element_filling
+
+            if element_filling == " ":
+                features["door"]["instances"][features["door"]["count"]] = (element_x, element_y)
+                features["door"]["count"] += 1
+            else:
+                OBS[element_x][element_y] = 1
+
+    return MAP, OBS
+
+
 
 def randomise_map(MAP, OBS, element_count):
     global features
@@ -79,22 +155,8 @@ def randomise_map(MAP, OBS, element_count):
             (x, y+1),  (x, y-1), (x+1, y+1),
             (x-1,y-1), (x+1,y-1), (x-1,y-1)]
 
-        # map occurances x to position y (x : [y1, y2, yn])
-        weight_map = {
-            1 : [6, 7, 8],
-            2 : [0, 5],
-            3 : [4],
-            4 : [1, 2, 3]
-        }
-        
-        weights = []
-        # create a weight list for feature generation
-        for weight in weight_map.keys():
-            for position in weight_map[weight]:
-                for occurance in range(weight):
-                    # add an *weight* occurancances of position to the weight list
-                    weights.append(position)
-               
+        # this is really bad code pls ignore it
+        weights = [0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,5,5,6,7,8]
 
         for i in range(random.randint(0, random.choice(weights))):
             n_x, n_y = possibles[i]
@@ -111,6 +173,10 @@ def randomise_map(MAP, OBS, element_count):
         features['rock']['count'] += 1
         MAP[rand_x][rand_y] = feature['rock']
         OBS[rand_x][rand_y] = 1
+
+
+    MAP, OBS = add_houses(MAP, OBS, features)
+
     return (MAP, OBS)
 
 # first element is p_id, all others are particles of [id, coord, type, age, lifespan,]
@@ -385,20 +451,25 @@ def hunter_AI(entity_tracker, OBS, e_history):
 
         # decided whether stuck or not
         e_history = history_update(e_history, entity_id, hunter[2])
-        if check_stuck(e_history, entity_id):
-            next_move = next_step(hunter[2], player, OBS, override_recursion=8)
-        else:
-            state = entity_tracker[entity_id][3]
-            if state == "hunting":
+        state = entity_tracker[entity_id][3]
+        if state == "hunting":
+            if (check_stuck(e_history, entity_id)):
+                next_move = next_step(hunter[2], player, OBS, override_recursion=8)
+            else:
                 next_move = next_step(hunter[2], player, OBS)
-            elif state == "wandering":
-                next_move = wander(hunter[2], OBS)
+        elif state == "wandering":
+            next_move = wander(hunter[2], OBS)
         entity_tracker, OBS = move_entity(entity_tracker,OBS, entity_id, next_move)
 
     return entity_tracker, OBS, e_history
 
 
-def check_collision(co_ord):
+def check_collision(co_ord, OBS=None):
+
+    if OBS:
+        if check_OBS_collision(co_ord[0], co_ord[1], OBS):
+            return True
+
     for key, value in feature.items():
         if value == MAP[co_ord[0]][co_ord[1]]:
             if tuple(co_ord) in features[key]['instances'].values():
@@ -457,12 +528,12 @@ def move_entity(entity_tracker, OBS, ent_id, delta):
     # check coord is within gamemap
     in_bounds = check_bounds(potential_coord)
 
-    if in_bounds == -1:
+    if (in_bounds == -1):
         potential_coord[1] -= 2*y_displace
-    elif in_bounds == -2:
+    elif (in_bounds == -2):
         potential_coord[0] -= 2*x_displace
 
-    if not check_collision(potential_coord):
+    if not check_collision(potential_coord, OBS):
         OBS[entity_x][entity_y] = 0
         OBS[potential_coord[0]][potential_coord[1]] = 1
         entity_tracker[ent_id][2] = potential_coord
@@ -483,6 +554,8 @@ def calculate_delta(direction):
         "d" : (0, 1)
     }
     return directions_equiv[direction]
+
+
 
 def compile_entities(entities):
     # compile all entities in starting list into entity tracker
@@ -526,14 +599,15 @@ def strip_overlay(MAP, last_list):
 
     return MAP
 
-def random_location(entities, dist_from_player=10):
+def random_location(entities=None, dist_from_player=10):
     # chooses a random location a given distance from the player
     choice = [1, -1]
     multi1, multi2 = random.choice(choice), random.choice(choice)
-    player_x, player_y = entities[0][2]
+
 
     # specific distance selected
     if dist_from_player > 0:
+        player_x, player_y = entities[0][2]
         random_coord = [player_x + (multi1 * dist_from_player), player_y + (multi2 * dist_from_player)]
 
     # can be placed anywhere on the map
@@ -567,8 +641,9 @@ def keyboard_input():
     # take watches for valid input on keyboard
     with keyboard.Events() as events:
         # Block for as much as possible
-        choices = ['w','a','s','d']
-        event = events.get(1e6)
+        choices = ['w','a','s','d', 'c']
+        bufferSize = 1e6
+        event = events.get(bufferSize)
         for possible in choices:
             if keyboard_checker(event, possible):
                 return possible
@@ -580,6 +655,8 @@ def input_logic():
     new_com = keyboard_input()
     if new_com == "!":
         new_delta = (0, 0)
+    elif new_com == 'c':
+        return new_com
     else:
         element = new_com[0]
         new_delta = calculate_delta(element)   # calculate next coord
@@ -609,6 +686,26 @@ def history_update(h_dict, ent_id, coord, limit=7):
     message_list.append("HIST: " + str(history_len))
     return h_dict
 
+def fade_in(MAP, OBS, entity_tracker, particle_tracker):
+    for view in range(0,BOARD_SIDE_LENGTH):
+        time.sleep(0.015)
+        print_map(add_overlay(MAP,OBS,entity_tracker, particle_tracker)[0], entity_tracker, True, view)
+
+def fade_out(MAP, OBS, entity_tracker, particle_tracker):
+    for view in range(BOARD_SIDE_LENGTH, -1, -1):
+        time.sleep(0.015)
+        print_map(add_overlay(MAP,OBS,entity_tracker, particle_tracker)[0], entity_tracker, True, view)
+
+
+
+def interaction(coord, features, MAP, OBS, entity_tracker, particle_tracker):
+
+    interactions = {
+        "doors" : house
+    }
+
+    if (coord[0], coord[1]) in features["door"]["instances"].values():
+        interactions["doors"](MAP, OBS, entity_tracker, particle_tracker)
 
 def check_stuck(h_dict, ent_id):
     global message_list
@@ -640,6 +737,7 @@ def check_stuck(h_dict, ent_id):
 def command_watchdog(previous_command):
     while abs(time.time() - previous_command) < 0.13:
         continue
+
 
 
 def add_particle(symbol, co_ord, duration, particle_tracker):
@@ -674,7 +772,7 @@ estimate_loading(M_S_L)
 
 
 # generate empty MAP and OBS
-MAP, OBS, e_history, message_list, object = [], [], {}, [], {}
+MAP, OBS, e_history, message_list, object, item_tracker = [], [], {}, [], {}, []
 for row in range(M_S_L):
     new_row, new_obs = [], []
     for col in range(M_S_L):
@@ -684,8 +782,11 @@ for row in range(M_S_L):
     OBS.append(new_obs)
 
 
+
+
+
 # calculate the number of objects that should appear in map
-goal_objects = int((M_S_L**2) * DENSITY_MULT)
+goal_objects = int(math.pow(M_S_L,2) * DENSITY_MULT)
 
 # initialise map, obstacle tracker, and entity tracker
 MAP, OBS = randomise_map(MAP, OBS, goal_objects)
@@ -716,9 +817,15 @@ for i in range(5):
 for ent in entity_tracker:
     e_history[ent[0]] = []
 
+local_mask, mask_size = False, 10
+
 while True:
+
+    # run interaction checing
+    interaction(entity_tracker[0][2],features, MAP, OBS, entity_tracker, particle_tracker)
+
     # display map and hold for move delay
-    print_map(add_overlay(MAP,OBS,entity_tracker, particle_tracker)[0], entity_tracker)
+    print_map(add_overlay(MAP,OBS,entity_tracker, particle_tracker)[0], entity_tracker, local_mask, mask_size)
     # prevent command overlap
     command_watchdog(last_move)
 
@@ -727,6 +834,10 @@ while True:
 
     # get new player move
     player_move = input_logic()
+
+    if (player_move == 'c'):
+        local_mask ^= True
+        continue
 
     # update map with new player move
     entity_tracker, OBS = move_entity(entity_tracker, OBS, 0, player_move)
